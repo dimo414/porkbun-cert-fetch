@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+set -u
+
+: "${API_KEY:?}" "${SECRET_API_KEY:?}"
+
+# usage: curl_porkbun [endpoint] [json_request]
+# Expects API_KEY and SECRET_API_KEY are set
+# Outputs path to JSON response on success, caller is responsible for deleting when done
+curl_porkbun() {
+  local endpoint="https://api.porkbun.com/api/json/v3/${1:?endpoint}" request=${2:?request} response_path
+  # mktemp files are created with permissions 600, so it's safe to write private data to them
+  response_path=$(mktemp) || return
+  request=$(jq --arg key "${API_KEY:?}" --arg secret "${SECRET_API_KEY:?}" '{apikey: $key, secretapikey: $secret} * .' <<<"$request")
+  local curl_args=(
+    --silent
+    --show-error
+    --data-raw "$request"
+    -o "$response_path"
+  )
+
+  curl "${curl_args[@]}" "$endpoint" || return
+  if [[ "$(jq --raw-output .status "$response_path")" != "SUCCESS" ]]; then
+    cat "$response_path" >&2 && rm "$response_path"
+    return 1
+  fi
+  echo "$response_path"
+}
+
+# usage: get_porkbun_cert [domain] [destination] (force)
+# Expects API_KEY and SECRET_API_KEY are set
+# Retrieves SSL certs for domain and writes to destination if absent or stale
+get_porkbun_cert() {
+  local domain=${1:?domain} destination=${2:?destination} force=${3:-false}
+
+  local tmpdir response_path
+  mkdir -p "$destination"
+  tmpdir=$(mktemp -d) || return
+  echo "Fetching certificates for ${domain}"
+  response_path=$(curl_porkbun "ssl/retrieve/${domain}" '{}') || return
+
+  delta=0
+  for field in certificatechain privatekey publickey; do
+    local file="${domain//./_}.${field}.pem"
+    jq --exit-status --raw-output ".${field}" "$response_path" > "${tmpdir}/${file}" || return
+    cmp -s "${destination}/${file}" "${tmpdir}/${file}" || delta=1
+  done
+  rm "$response_path"
+
+  if (( delta != 0 )) || [[ "$force" == true ]]; then
+    mv -t "$destination" "$tmpdir"/* || return
+    echo "Certificate for ${domain} in ${destination} has been updated"
+  fi
+  rm -rf "$tmpdir"
+}
+
+report_cert_status() {
+  local domain=${1:?domain} destination=${2:?destination} node_exporter_dir=${3:-}
+  local expiry expiry_ts
+  expiry=$(openssl x509 -noout -enddate -in "${destination}/${domain//./_}.certificatechain.pem") || return
+  expiry=${expiry/notAfter=/}
+  expiry_ts=$(date +%s -d "$expiry")
+
+  echo "Certificate for ${domain} will expire on: ${expiry}"
+
+  if [[ -n "$node_exporter_dir" ]]; then
+    mkdir -p "$node_exporter_dir" || return
+    printf "%s{domain=\"${domain}\"} %s\n" \
+      ssl_cert_fetch_completion_time_seconds "$(date +%s)" \
+      ssl_cert_fetch_cert_expires_time_seconds "$expiry_ts" \
+      >> "${node_exporter_dir}/porkbun-cert-fetch.prom.$$"
+  fi
+}
+
+
+main() {
+  local arg destination=~/.ssl force=false domains=()
+  local node_exporter_dir=${NODE_EXPORTER_TEXTFILE_DIR:-}
+  while (( $# )); do
+    arg=$1; shift
+    case "$arg" in
+      --destination)       destination="$1"; shift ;;
+      --force)             force=true ;;
+      --node_exporter_textfile_dir) node_exporter_dir=$1; shift ;;
+      --*)                 echo "Unknown flag $arg" >&2; exit 2 ;;
+      *)                   domains+=("$arg")
+    esac
+  done
+
+  if (( ${#domains[@]} == 0 )); then
+    echo "No domains provided" >&2; exit 2
+  fi
+
+  local success=0
+  for domain in "${domains[@]}"; do
+    get_porkbun_cert "$domain" "$destination" "$force"
+    success=$(( success || $? ))
+
+    report_cert_status "$domain" "$destination" "$node_exporter_dir"
+  done
+
+  if [[ -n "${node_exporter_dir}" ]] && [[ -e "${node_exporter_dir}/porkbun-cert-fetch.prom.$$" ]]; then
+    mv "${node_exporter_dir}/porkbun-cert-fetch.prom.$$" "${node_exporter_dir}/porkbun-cert-fetch.prom"
+  fi
+}
+
+main "$@"
