@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
+#
+# Utility to fetch wildcard LetsEncrypt SSL certificates from Porkbun-registered domains using their API.
+#
+# If the certificates already exist on disk they are not overwritten, enabling downstream tools to check the file
+# modtime to determine when to reload.
+#
+# Usage:
+# porkbun-cert-fetch [--destination DIR] [--force] [--node_exporter_textfile_dir DIR] domain ...
+#
+# You will need to enable Porkbun API access for the domain(s) you intend to query, and then provide the API and secret
+# keys via the environment variables `API_KEY` and `SECRET_API_KEY`, respectively.
+#
+# * --destination                 Specify the directory to write the certificates to, defaults to ~/.ssl
+# * --force                       Overwrite local files even if the contents have not changed
+# * --node_exporter_textfile_dir  Specify a directory to write Prometheus metrics to, for publishing via node_exporter
 
 set -u
 
-: "${API_KEY:?}" "${SECRET_API_KEY:?}"
+: "${API_KEY:?}"
+: "${SECRET_API_KEY:?}"
 
 # usage: curl_porkbun [endpoint] [json_request]
 # Expects API_KEY and SECRET_API_KEY are set
