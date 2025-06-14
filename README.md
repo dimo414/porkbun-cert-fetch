@@ -1,6 +1,8 @@
 # Porkbun SSL Certificate Fetcher
 
-Utility to fetch wildcard LetsEncrypt SSL certificates from Porkbun-registered domains using their API.
+Utility to fetch
+[wildcard LetsEncrypt SSL certificates from Porkbun-registered domains](https://porkbun.com/products/ssl)
+using their API.
 
 If the certificates already exist on disk they are not overwritten, enabling downstream tools to check the file modtime
 to determine when to reload.
