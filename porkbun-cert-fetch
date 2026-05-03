@@ -118,6 +118,8 @@ main() {
   if [[ -n "${node_exporter_dir}" ]] && [[ -e "${node_exporter_dir}/porkbun-cert-fetch.prom.$$" ]]; then
     mv "${node_exporter_dir}/porkbun-cert-fetch.prom.$$" "${node_exporter_dir}/porkbun-cert-fetch.prom"
   fi
+
+  return "$success"
 }
 
 main "$@"
